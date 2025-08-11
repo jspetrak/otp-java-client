@@ -16,6 +16,7 @@ import org.apache.hc.client5.http.classic.methods.HttpPost;
 import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
 import org.apache.hc.client5.http.impl.classic.HttpClientBuilder;
 import org.apache.hc.core5.http.ContentType;
+import org.apache.hc.core5.http.HttpStatus;
 import org.apache.hc.core5.http.io.entity.StringEntity;
 import org.opentripplanner.api.types.AgencyResponseProjection;
 import org.opentripplanner.api.types.DefaultFareProductResponseProjection;
@@ -68,8 +69,6 @@ public class OtpApiClient {
       new StopResponseProjection().gtfsId().name().code();
   public static final PlaceResponseProjection PLACE_PROJECTION =
       new PlaceResponseProjection().name().departureTime().arrivalTime().stop(STOP_PROJECTION);
-
-  private final CloseableHttpClient httpClient = HttpClientBuilder.create().build();
 
   private final URI graphQlUri;
   private final ObjectMapper mapper;
@@ -252,18 +251,22 @@ public class OtpApiClient {
   private JsonNode sendRequest(String formattedQuery) throws IOException {
     LOG.debug("Sending GraphQL query to {}: {}", graphQlUri, formattedQuery);
 
-    HttpPost httpPost = new HttpPost(graphQlUri);
-    var stringEntity = new StringEntity(formattedQuery, ContentType.APPLICATION_JSON);
-    httpPost.setEntity(stringEntity);
-    var response = httpClient.execute(httpPost);
-    if (response.getCode() != 200) {
-      throw new IOException(
-          "HTTP request to '%s' returned status code %s".formatted(graphQlUri, response.getCode()));
-    }
-    var jsonNode = mapper.readTree(response.getEntity().getContent());
+    try (CloseableHttpClient httpClient = HttpClientBuilder.create().build()) {
+        HttpPost httpPost = new HttpPost(graphQlUri);
+        var stringEntity = new StringEntity(formattedQuery, ContentType.APPLICATION_JSON);
+        httpPost.setEntity(stringEntity);
+        var response = httpClient.execute(httpPost, classicHttpResponse -> {
+            if (HttpStatus.SC_OK == classicHttpResponse.getCode()) {
+                return classicHttpResponse;
+            }
 
-    LOG.trace("Received the following JSON: {}", jsonNode.toPrettyString());
-    return jsonNode;
+            throw new IOException("HTTP request to '%s' returned status code %s".formatted(graphQlUri, classicHttpResponse.getCode()));
+        });
+        var jsonNode = mapper.readTree(response.getEntity().getContent());
+
+        LOG.trace("Received the following JSON: {}", jsonNode.toPrettyString());
+        return jsonNode;
+    }
   }
 
   @Deprecated
